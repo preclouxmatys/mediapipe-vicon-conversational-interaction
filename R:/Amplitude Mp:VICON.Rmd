@@ -1,0 +1,157 @@
+---
+title: "R Notebook Amplitude for MediaPipe VS Vicon"
+---
+
+
+```{r}
+library(readxl)
+
+library(dplyr)
+
+library(tidyr)
+
+library(ggplot2)
+
+library(psych)
+
+install.packages ("writexl")
+
+library(writexl)
+```
+
+```{r}
+# -------------------------
+# 1) Load data
+# -------------------------
+AMP_PATH <- "amplitude_WRISTS_MP_scaled_to_mm.xlsx"
+
+amp <- read_excel(AMP_PATH)
+
+# Variable MediaPipe finale en mm
+mp_var <- "MP_ampWRISTS_pp_sum_mm"
+
+# Variables Vicon selon projection
+vicon_vars <- c(
+  "VICON_XY_ampWRISTS_pp_sum_mm",
+  "VICON_XZ_ampWRISTS_pp_sum_mm",
+  "VICON_YZ_ampWRISTS_pp_sum_mm"
+)
+
+# -------------------------
+# 2) Fonction stats
+# -------------------------
+compute_validity <- function(data, mp_col, vicon_col) {
+  
+  df <- data %>%
+    select(all_of(mp_col), all_of(vicon_col)) %>%
+    rename(
+      MP = all_of(mp_col),
+      VICON = all_of(vicon_col)
+    ) %>%
+    drop_na()
+  
+  r_test <- cor.test(df$MP, df$VICON, method = "pearson")
+  
+  rmse <- sqrt(mean((df$MP - df$VICON)^2))
+  bias <- mean(df$MP - df$VICON)
+  sd_diff <- sd(df$MP - df$VICON)
+  loa_lower <- bias - 1.96 * sd_diff
+  loa_upper <- bias + 1.96 * sd_diff
+  
+  icc_res <- psych::ICC(df[, c("MP", "VICON")])
+
+tibble(
+
+  projection = gsub("VICON_|_ampWRISTS_pp_sum_mm", "", vicon_col),
+
+  n = nrow(df),
+
+  r = unname(r_test$estimate),
+
+  p_value = r_test$p.value,
+
+  R2 = unname(r_test$estimate)^2,
+
+  ICC_2_1 = icc_res$results[2, "ICC"],
+
+  ICC_lower = icc_res$results[2, "lower bound"],
+
+  ICC_upper = icc_res$results[2, "upper bound"],
+
+  RMSE = rmse,
+
+  bias_MP_minus_VICON = bias,
+
+  LoA_lower = loa_lower,
+
+  LoA_upper = loa_upper
+
+)
+}
+
+# -------------------------
+# 3) Stats pour les 3 projections
+# -------------------------
+amp_results <- bind_rows(
+  lapply(vicon_vars, function(v) compute_validity(amp, mp_var, v))
+)
+
+print(amp_results)
+
+# Sauvegarde résultats
+write_xlsx(amp_results, "amplitude_validity_results.xlsx")
+
+# -------------------------
+# 4) Format long pour figures
+# -------------------------
+amp_long <- amp %>%
+  select(dyad, condition, pid, all_of(mp_var), all_of(vicon_vars)) %>%
+  pivot_longer(
+    cols = all_of(vicon_vars),
+    names_to = "projection",
+    values_to = "VICON"
+  ) %>%
+  mutate(
+    projection = gsub("VICON_|_ampWRISTS_pp_sum_mm", "", projection),
+    MP = .data[[mp_var]],
+    mean_systems = (MP + VICON) / 2,
+    diff_MP_minus_VICON = MP - VICON
+  ) %>%
+  drop_na(MP, VICON)
+
+# -------------------------
+# 5) Scatterplots MP vs Vicon
+# -------------------------
+p_scatter <- ggplot(amp_long, aes(x = VICON, y = MP)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", se = TRUE) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  facet_wrap(~ projection, scales = "free") +
+  labs(
+    title = "Wrist amplitude: MediaPipe vs Vicon projections",
+    x = "Vicon wrist amplitude (mm)",
+    y = "MediaPipe wrist amplitude scaled to mm"
+  ) +
+  theme_classic()
+
+print(p_scatter)
+ggsave("amplitude_scatter_MP_vs_VICON.png", p_scatter, width = 10, height = 5, dpi = 300)
+
+# -------------------------
+# 6) Bland-Altman plots
+# -------------------------
+p_ba <- ggplot(amp_long, aes(x = mean_systems, y = diff_MP_minus_VICON)) +
+  geom_point(alpha = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~ projection, scales = "free") +
+  labs(
+    title = "Bland-Altman plots for wrist amplitude",
+    x = "Mean of MediaPipe and Vicon amplitude (mm)",
+    y = "MediaPipe - Vicon amplitude (mm)"
+  ) +
+  theme_classic()
+
+print(p_ba)
+ggsave("amplitude_bland_altman.png", p_ba, width = 10, height = 5, dpi = 300)
+```
+

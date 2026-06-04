@@ -1,0 +1,212 @@
+---
+title: "R Notebook Angle elbow Mp/Vicon"
+
+---
+
+
+```{r}
+# =========================
+# Stats angle coude MP vs Vicon
+# =========================
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(writexl)
+
+# -------------------------
+# 1) Paths
+# -------------------------
+
+
+
+angle_files <- tibble(
+
+  projection = c("XY", "XZ", "YZ"),
+
+  path = c(
+
+    "ANGLE_elbow_MP_vs_VICON_planeXY_noInterp.xlsx",
+
+    "ANGLE_elbow_MP_vs_VICON_planeXZ_noInterp.xlsx",
+
+    "ANGLE_elbow_MP_vs_VICON_planeYZ_noInterp.xlsx"
+
+  )
+
+)
+
+# Vérifier les chemins
+print(angle_files)
+print(file.exists(angle_files$path))
+
+# -------------------------
+# 2) Load and bind files
+# -------------------------
+
+angle_data <- angle_files %>%
+  rowwise() %>%
+  mutate(data = list(read_excel(path))) %>%
+  ungroup() %>%
+  select(projection, data) %>%
+  unnest(data)
+
+# Garder uniquement les lignes valides
+angle_data <- angle_data %>%
+  filter(is.na(error) | error == "")
+
+# -------------------------
+# 3) Résumé par projection
+# -------------------------
+
+angle_summary <- angle_data %>%
+  group_by(projection) %>%
+  summarise(
+    n = n(),
+    
+    # MediaPipe vs Vicon projeté 2D
+    mean_r_VI2_R = mean(corr_MP_vs_VI2_R, na.rm = TRUE),
+    sd_r_VI2_R = sd(corr_MP_vs_VI2_R, na.rm = TRUE),
+    mean_r_VI2_L = mean(corr_MP_vs_VI2_L, na.rm = TRUE),
+    sd_r_VI2_L = sd(corr_MP_vs_VI2_L, na.rm = TRUE),
+    
+    mean_r_VI2_bilateral = mean(c(corr_MP_vs_VI2_R, corr_MP_vs_VI2_L), na.rm = TRUE),
+    sd_r_VI2_bilateral = sd(c(corr_MP_vs_VI2_R, corr_MP_vs_VI2_L), na.rm = TRUE),
+    
+    mean_RMSE_VI2_R = mean(rmse_MP_vs_VI2_R, na.rm = TRUE),
+    sd_RMSE_VI2_R = sd(rmse_MP_vs_VI2_R, na.rm = TRUE),
+    mean_RMSE_VI2_L = mean(rmse_MP_vs_VI2_L, na.rm = TRUE),
+    sd_RMSE_VI2_L = sd(rmse_MP_vs_VI2_L, na.rm = TRUE),
+    
+    mean_RMSE_VI2_bilateral = mean(c(rmse_MP_vs_VI2_R, rmse_MP_vs_VI2_L), na.rm = TRUE),
+    sd_RMSE_VI2_bilateral = sd(c(rmse_MP_vs_VI2_R, rmse_MP_vs_VI2_L), na.rm = TRUE),
+    
+    # MediaPipe vs Vicon 3D
+    mean_r_VI3_R = mean(corr_MP_vs_VI3_R, na.rm = TRUE),
+    sd_r_VI3_R = sd(corr_MP_vs_VI3_R, na.rm = TRUE),
+    mean_r_VI3_L = mean(corr_MP_vs_VI3_L, na.rm = TRUE),
+    sd_r_VI3_L = sd(corr_MP_vs_VI3_L, na.rm = TRUE),
+    
+    mean_r_VI3_bilateral = mean(c(corr_MP_vs_VI3_R, corr_MP_vs_VI3_L), na.rm = TRUE),
+    sd_r_VI3_bilateral = sd(c(corr_MP_vs_VI3_R, corr_MP_vs_VI3_L), na.rm = TRUE),
+    
+    mean_RMSE_VI3_R = mean(rmse_MP_vs_VI3_R, na.rm = TRUE),
+    sd_RMSE_VI3_R = sd(rmse_MP_vs_VI3_R, na.rm = TRUE),
+    mean_RMSE_VI3_L = mean(rmse_MP_vs_VI3_L, na.rm = TRUE),
+    sd_RMSE_VI3_L = sd(rmse_MP_vs_VI3_L, na.rm = TRUE),
+    
+    mean_RMSE_VI3_bilateral = mean(c(rmse_MP_vs_VI3_R, rmse_MP_vs_VI3_L), na.rm = TRUE),
+    sd_RMSE_VI3_bilateral = sd(c(rmse_MP_vs_VI3_R, rmse_MP_vs_VI3_L), na.rm = TRUE),
+    
+    .groups = "drop"
+  ) %>%
+  arrange(mean_RMSE_VI2_bilateral)
+
+print(angle_summary)
+
+# -------------------------
+# 4) Format long pour figures
+# -------------------------
+
+angle_long <- angle_data %>%
+  select(
+    projection, dyad, condition, pid,
+    corr_MP_vs_VI2_R, corr_MP_vs_VI2_L,
+    rmse_MP_vs_VI2_R, rmse_MP_vs_VI2_L,
+    corr_MP_vs_VI3_R, corr_MP_vs_VI3_L,
+    rmse_MP_vs_VI3_R, rmse_MP_vs_VI3_L
+  ) %>%
+  pivot_longer(
+    cols = starts_with("corr_MP_vs") | starts_with("rmse_MP_vs"),
+    names_to = "metric",
+    values_to = "value"
+  ) %>%
+  mutate(
+    reference = case_when(
+      grepl("VI2", metric) ~ "Vicon projected 2D",
+      grepl("VI3", metric) ~ "Vicon 3D",
+      TRUE ~ NA_character_
+    ),
+    side = case_when(
+      grepl("_R$", metric) ~ "Right",
+      grepl("_L$", metric) ~ "Left",
+      TRUE ~ NA_character_
+    ),
+    outcome = case_when(
+      grepl("^corr", metric) ~ "Correlation r",
+      grepl("^rmse", metric) ~ "RMSE",
+      TRUE ~ NA_character_
+    )
+  )
+
+# -------------------------
+# 5) Figures r
+# -------------------------
+
+p_r <- angle_long %>%
+  filter(outcome == "Correlation r") %>%
+  ggplot(aes(x = projection, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.5) +
+  facet_grid(reference ~ side) +
+  labs(
+    title = "Elbow angle tracking: MediaPipe vs Vicon",
+    x = "Vicon projection plane",
+    y = "Participant-level Pearson correlation"
+  ) +
+  theme_classic()
+
+print(p_r)
+ggsave("elbow_angle_correlations.png", p_r, width = 10, height = 6, dpi = 300)
+
+# -------------------------
+# 6) Figures RMSE
+# -------------------------
+
+p_rmse <- angle_long %>%
+  filter(outcome == "RMSE") %>%
+  ggplot(aes(x = projection, y = value)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(width = 0.15, alpha = 0.5) +
+  facet_grid(reference ~ side) +
+  labs(
+    title = "Elbow angle tracking error: MediaPipe vs Vicon",
+    x = "Vicon projection plane",
+    y = "RMSE (degrees)"
+  ) +
+  theme_classic()
+
+print(p_rmse)
+ggsave("elbow_angle_rmse.png", p_rmse, width = 10, height = 6, dpi = 300)
+
+# -------------------------
+# 7) Identifier le meilleur plan
+# -------------------------
+
+best_plane_rmse <- angle_summary %>%
+  select(
+    projection,
+    mean_r_VI2_bilateral,
+    sd_r_VI2_bilateral,
+    mean_RMSE_VI2_bilateral,
+    sd_RMSE_VI2_bilateral
+  ) %>%
+  arrange(mean_RMSE_VI2_bilateral)
+
+print(best_plane_rmse)
+
+# -------------------------
+# 8) Export
+# -------------------------
+
+write_xlsx(
+  list(
+    angle_summary = angle_summary,
+    angle_long = angle_long,
+    best_plane_rmse = best_plane_rmse
+  ),
+  "elbow_angle_validity_results.xlsx"
+)
+```
+

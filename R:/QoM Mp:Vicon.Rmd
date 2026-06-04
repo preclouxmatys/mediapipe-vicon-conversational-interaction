@@ -1,0 +1,203 @@
+---
+title: "R Notebook QoM MP/Vicon"
+
+---
+
+
+
+```{r}
+# =========================
+# QoM validity: MediaPipe vs Vicon
+# =========================
+
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(psych)
+library(writexl)
+library(scales)
+
+# -------------------------
+# 1) Path
+# -------------------------
+
+DATA_PATH <- "Stats.xlsx"
+
+# Vérifier que le fichier est bien trouvé
+print(file.exists(DATA_PATH))
+
+data <- read_excel(DATA_PATH)
+
+print(names(data))
+
+# -------------------------
+# 2) Variables
+# -------------------------
+
+qom_vars <- tibble(
+  segment = c("Wrist", "Head"),
+  mp_col = c("MQI_WRIST_MP", "MQI_HEAD_MP"),
+  vicon_col = c("MQI_WRIST_VICON", "MQI_HEAD_VICON")
+)
+
+# -------------------------
+# 3) Fonction stats
+# -------------------------
+
+compute_qom_validity <- function(data, mp_col, vicon_col, segment_name) {
+  
+  df <- data %>%
+    select(all_of(mp_col), all_of(vicon_col)) %>%
+    rename(
+      MP = all_of(mp_col),
+      VICON = all_of(vicon_col)
+    ) %>%
+    drop_na()
+  
+  r_test <- cor.test(df$MP, df$VICON, method = "pearson")
+  
+  diff <- df$MP - df$VICON
+  rmse <- sqrt(mean(diff^2))
+  bias <- mean(diff)
+  sd_diff <- sd(diff)
+  loa_lower <- bias - 1.96 * sd_diff
+  loa_upper <- bias + 1.96 * sd_diff
+  
+  icc_res <- psych::ICC(df[, c("MP", "VICON")])
+  
+  tibble(
+    segment = segment_name,
+    n = nrow(df),
+    r = unname(r_test$estimate),
+    r_CI_lower = r_test$conf.int[1],
+    r_CI_upper = r_test$conf.int[2],
+    p_value = r_test$p.value,
+    R2 = unname(r_test$estimate)^2,
+    ICC_2_1 = icc_res$results[2, "ICC"],
+    ICC_lower = icc_res$results[2, "lower bound"],
+    ICC_upper = icc_res$results[2, "upper bound"],
+    RMSE = rmse,
+    bias_MP_minus_VICON = bias,
+    LoA_lower = loa_lower,
+    LoA_upper = loa_upper
+  )
+}
+
+# -------------------------
+# 4) Calcul des stats QoM
+# -------------------------
+
+qom_results <- qom_vars %>%
+  rowwise() %>%
+  mutate(
+    stats = list(
+      compute_qom_validity(
+        data = data,
+        mp_col = mp_col,
+        vicon_col = vicon_col,
+        segment_name = segment
+      )
+    )
+  ) %>%
+  ungroup() %>%
+  select(stats) %>%
+  unnest(stats)
+
+print(qom_results)
+
+# -------------------------
+# 5) Format long pour figures
+# -------------------------
+
+qom_long <- qom_vars %>%
+  rowwise() %>%
+  mutate(
+    data_long = list(
+      data %>%
+        select(all_of(mp_col), all_of(vicon_col)) %>%
+        rename(
+          MP = all_of(mp_col),
+          VICON = all_of(vicon_col)
+        ) %>%
+        mutate(
+          segment = segment,
+          mean_systems = (MP + VICON) / 2,
+          diff_MP_minus_VICON = MP - VICON
+        ) %>%
+        drop_na()
+    )
+  ) %>%
+  ungroup() %>%
+  select(data_long) %>%
+  unnest(data_long)
+
+# -------------------------
+# 6) Scatterplots
+# -------------------------
+
+p_scatter <- ggplot(qom_long, aes(x = VICON, y = MP)) +
+  geom_point(alpha = 0.7, size = 2.5) +
+  geom_smooth(method = "lm", se = TRUE, linewidth = 1) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  facet_wrap(~ segment, scales = "free") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "QoM: MediaPipe vs Vicon",
+    x = "Vicon QoM (mm)",
+    y = "MediaPipe QoM (mm)"
+  ) +
+  theme_classic(base_size = 14)
+
+print(p_scatter)
+
+ggsave(
+  filename = "qom_scatter_MP_vs_VICON.png",
+  plot = p_scatter,
+  width = 10,
+  height = 5,
+  dpi = 300
+)
+
+# -------------------------
+# 7) Bland-Altman plots
+# -------------------------
+
+p_ba <- ggplot(qom_long, aes(x = mean_systems, y = diff_MP_minus_VICON)) +
+  geom_point(alpha = 0.7, size = 2.5) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  facet_wrap(~ segment, scales = "free") +
+  scale_x_continuous(labels = comma) +
+  scale_y_continuous(labels = comma) +
+  labs(
+    title = "Bland-Altman plots for QoM",
+    x = "Mean of MediaPipe and Vicon QoM (mm)",
+    y = "MediaPipe - Vicon QoM (mm)"
+  ) +
+  theme_classic(base_size = 14)
+
+print(p_ba)
+
+ggsave(
+  filename = "qom_bland_altman.png",
+  plot = p_ba,
+  width = 10,
+  height = 5,
+  dpi = 300
+)
+
+# -------------------------
+# 8) Export résultats
+# -------------------------
+
+write_xlsx(
+  list(
+    qom_results = qom_results,
+    qom_long = qom_long
+  ),
+  "qom_validity_results.xlsx"
+)
+```
+
+
